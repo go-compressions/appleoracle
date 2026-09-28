@@ -1,0 +1,60 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # 1. PROVES: the oracle actually answers. This is the only job that can --
+  #    libcompression is macOS, and everything else here is a stub.
+  darwin:
+    name: the platform answers (macos)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with: { go-version: stable }
+      - run: gofmt -l . | tee /tmp/fmt && test ! -s /tmp/fmt
+      - run: go vet ./...
+      - name: test with cgo
+        run: CGO_ENABLED=1 go test -count=1 -v ./...
+      # The tests skip when Available() is false, and a suite of skips is
+      # green. So the macOS job asserts it was NOT skipped -- otherwise this
+      # whole repository could go quiet without anything turning red.
+      - name: the macos job must not be a suite of skips
+        run: |
+          CGO_ENABLED=1 go test -count=1 -v ./... > out.txt 2>&1
+          ran=$(grep -c -- '--- PASS' out.txt)
+          skipped=$(grep -c -- '--- SKIP' out.txt)
+          echo "passed=$ran skipped=$skipped"
+          test "$ran" -ge 6 || { echo "::error::only $ran tests ran on the one platform that can ask"; exit 1; }
+
+  # 2. PROVES: a consumer that imports this from a _test.go still builds where
+  #    there is no libcompression, and the stub refuses rather than returning a
+  #    plausible empty answer.
+  elsewhere:
+    name: the stub refuses (${{ matrix.os }}, cgo=${{ matrix.cgo }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, cgo: '0' }
+          - { os: ubuntu-latest, cgo: '1' }
+          - { os: windows-latest, cgo: '0' }
+          - { os: macos-latest, cgo: '0' }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with: { go-version: stable }
+      - name: build and test
+        env:
+          CGO_ENABLED: ${{ matrix.cgo }}
+        run: |
+          go build ./...
+          go test -count=1 -run TestTheStubRefuses -v ./...
