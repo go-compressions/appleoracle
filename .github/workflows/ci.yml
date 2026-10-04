@@ -33,6 +33,15 @@ jobs:
           skipped=$(grep -c -- '--- SKIP' out.txt)
           echo "passed=$ran skipped=$skipped"
           test "$ran" -ge 6 || { echo "::error::only $ran tests ran on the one platform that can ask"; exit 1; }
+      # The org landing page prints a "coverage 100%" badge next to every card,
+      # and a badge nobody enforces is a claim, not a measurement. macOS is the
+      # only runner where this package does anything, so the gate lives here.
+      - name: coverage gate (100%)
+        run: |
+          CGO_ENABLED=1 go test -covermode=atomic -coverprofile=cov.out ./...
+          pct=$(go tool cover -func=cov.out | awk '/^total:/{print $3}')
+          echo "coverage=$pct"
+          [ "$pct" = "100.0%" ] || { echo "::error::coverage $pct, below 100%"; exit 1; }
 
   # 2. PROVES: a consumer that imports this from a _test.go still builds where
   #    there is no libcompression, and the stub refuses rather than returning a
