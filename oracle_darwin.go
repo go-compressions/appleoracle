@@ -81,10 +81,24 @@ func Encode(a Algorithm, src []byte) (out []byte, ok bool) {
 // the truncation is invisible. Measured: asking for len(src)-1 succeeded and
 // handed back a prefix. One spare byte makes an over-long stream report
 // want+1, which is not want, which is a refusal.
+//
+// want is the size of the buffer allocated, so it is bounded: a want below zero
+// or above [MaxDecode] is a refusal (nil, false) and allocates nothing. Before
+// that bound want = -1 panicked on &dst[0], want = -2 and want = MaxInt panicked
+// in make, and want = 16 GiB allocated 17 179 877 376 bytes.
 func Decode(a Algorithm, src []byte, want int) (out []byte, ok bool) {
+	if want < 0 || want > MaxDecode {
+		return nil, false
+	}
 	if want == 0 {
 		// Nothing to write, so a zero return says nothing about failure.
 		return nil, true
+	}
+	if len(src) == 0 {
+		// An empty stream holds no bytes, and it is not handed to the platform:
+		// compression_decode_buffer(LZVN, dst, 100, NULL, 0) is a SIGSEGV inside
+		// libcompression (found by FuzzDecode), which takes the process down.
+		return nil, false
 	}
 	dst := make([]byte, want+1)
 	n := C.oracle_decode(raw(a), (*C.uchar)(unsafe.Pointer(&dst[0])), C.size_t(len(dst)),

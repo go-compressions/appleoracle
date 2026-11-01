@@ -2,7 +2,9 @@ package appleoracle_test
 
 import (
 	"bytes"
+	"math"
 	"math/rand"
+	"runtime"
 	"testing"
 
 	"github.com/go-compressions/appleoracle"
@@ -170,6 +172,91 @@ func TestTheStubRefusesRatherThanReturningNothing(t *testing.T) {
 	if _, ok := appleoracle.Decode(appleoracle.LZFSE, []byte("x"), 1); ok {
 		t.Error("Decode reported success without libcompression")
 	}
+}
+
+func allocated(f func()) uint64 {
+	var a, b runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&a)
+	f()
+	runtime.ReadMemStats(&b)
+	return b.TotalAlloc - a.TotalAlloc
+}
+
+// TestDecodeBoundsWhatItAllocates: want sizes the destination buffer, so a want
+// that is negative or above MaxDecode is a refusal that allocates nothing.
+// Unbounded, want = -1 panicked, -2 and MaxInt panicked in make, and 16 GiB
+// allocated 16 GiB.
+func TestDecodeBoundsWhatItAllocates(t *testing.T) {
+	src := []byte("not a stream")
+	for _, want := range []int{-1, -2, math.MinInt, math.MaxInt, appleoracle.MaxDecode + 1} {
+		for _, a := range algos {
+			var ok bool
+			cost := allocated(func() { _, ok = appleoracle.Decode(a, src, want) })
+			if ok {
+				t.Errorf("%v: Decode(want=%d) reported success", a, want)
+			}
+			if cost > 1<<20 {
+				t.Errorf("%v: Decode(want=%d) allocated %d bytes, want < 1 MiB", a, want, cost)
+			}
+		}
+	}
+}
+
+// At the bound the buffer is allocated (and the garbage stream is refused by
+// the platform, not by us), one over it is not.
+func TestDecodeAtTheBound(t *testing.T) {
+	if !appleoracle.Available() {
+		t.Skip("no libcompression on this build")
+	}
+	if testing.Short() {
+		t.Skip("allocates 1 GiB of address space")
+	}
+	if appleoracle.MaxDecode != 1<<30 {
+		t.Fatalf("MaxDecode = %d, want 1 GiB", appleoracle.MaxDecode)
+	}
+	if _, ok := appleoracle.Decode(appleoracle.LZFSE, []byte("not a stream"), appleoracle.MaxDecode); ok {
+		t.Error("garbage decoded at the bound")
+	}
+}
+
+// TestDecodeOfAnEmptyStreamIsARefusal is the named witness for the first crash
+// FuzzDecode found: LZVN decoding NULL, 0 bytes into a 100-byte buffer was a
+// SIGSEGV inside libcompression. It is written out as a test because the
+// fuzzer's testdata/ is not beside the test binary on every lane.
+func TestDecodeOfAnEmptyStreamIsARefusal(t *testing.T) {
+	for _, a := range algos {
+		for _, src := range [][]byte{nil, {}} {
+			if _, ok := appleoracle.Decode(a, src, 100); ok {
+				t.Errorf("%v: an empty stream decoded to 100 bytes", a)
+			}
+		}
+	}
+}
+
+// FuzzDecode feeds arbitrary bytes to Apple's decoders through cgo: a crash in
+// the C library is a crash of the test process, which the fuzzer reports. No
+// input may panic here, and a success must be exactly want bytes.
+func FuzzDecode(f *testing.F) {
+	for i, a := range algos {
+		if enc, ok := appleoracle.Encode(a, sample(4096, int64(i))); ok {
+			f.Add(byte(i), enc, 4096)
+		}
+	}
+	f.Add(byte(0), []byte("bvx2"), 100)
+	f.Add(byte(2), []byte("bv41"), 100)
+	f.Fuzz(func(t *testing.T, which byte, src []byte, want int) {
+		if !appleoracle.Available() {
+			t.Skip("no libcompression on this build")
+		}
+		if want > 1<<20 {
+			t.Skip("keep the fuzz target's own buffers small")
+		}
+		out, ok := appleoracle.Decode(algos[int(which)%len(algos)], src, want)
+		if ok && len(out) != want {
+			t.Fatalf("ok with %d bytes, want %d", len(out), want)
+		}
+	})
 }
 
 func TestAlgorithmString(t *testing.T) {

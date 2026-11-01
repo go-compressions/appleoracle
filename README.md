@@ -51,6 +51,26 @@ input. Those are not the same thing, so:
   for a stream holding **more** and the truncation is invisible. Measured:
   asking for `len(src)-1` succeeded and handed back a prefix.
 
+## Untrusted input
+
+This package is a test helper, but `Decode`'s `want` sizes a buffer and its
+`src` goes straight into Apple's C decoder, so both are bounded. Measured on the
+unmodified code:
+
+| call | result before |
+| --- | --- |
+| `Decode(a, src, -1)` | panic, index out of range (`&dst[0]`) |
+| `Decode(a, src, -2)`, `Decode(a, src, math.MaxInt)` | panic, `makeslice: len out of range` |
+| `Decode(a, src, 1<<34)` | allocated 17 179 877 376 bytes |
+| `Decode(LZVN, nil, 100)` | **SIGSEGV inside libcompression** (`NULL`, 0 bytes), found by `FuzzDecode` in under a second; takes the process down |
+
+Now a `want` below zero or above `MaxDecode` (1 GiB) is a refusal
+(`nil, false`) that allocates nothing, and an empty stream is a refusal that is
+never handed to the platform. `FuzzDecode` fuzzes all three algorithms through
+cgo; the crash input is kept in `testdata/fuzz/FuzzDecode/` and also written out
+as `TestDecodeOfAnEmptyStreamIsARefusal`. 95 s of fuzzing after the fix found
+nothing else. `Encode` allocates `len(src)+4096`, bounded by its own input.
+
 ## Scope
 
 `LZFSE`, `LZVN` and `LZ4` — what a repository here compares against today.
