@@ -13,5 +13,6 @@ func Available() bool { return false }
 // Encode always refuses on a build without libcompression.
 func Encode(Algorithm, []byte) (out []byte, ok bool) { return nil, false }
 
-// Decode always refuses on a build without libcompression.
+// Decode always refuses on a build without libcompression. It allocates
+// nothing, so [MaxDecode] does not need to be checked here.
 func Decode(Algorithm, []byte, int) (out []byte, ok bool) { return nil, false }

@@ -31,6 +31,12 @@
 // failure mode this package exists to remove, not to reproduce.
 package appleoracle
 
+// MaxDecode is the largest output size [Decode] will allocate a buffer for:
+// 1 GiB. A test that compares against the platform knows how big its plaintext
+// is; the bound is for the day the number comes from somewhere else, such as a
+// header of the stream under test.
+const MaxDecode = 1 << 30
+
 // Algorithm is one of the codecs libcompression implements.
 //
 // The list stops at what a repository in this organisation actually compares
